@@ -34,6 +34,10 @@ jobs:
           persist-credentials: false
           path: site
 
+      - name: Record the source commit
+        id: src
+        run: echo "sha=$(git -C site rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Drop repo-only files
         run: rm -f site/README.md
 
@@ -43,8 +47,12 @@ jobs:
           path: site
           retention-days: 1
 
+      # Pages treats the build version as unique per deployment. It defaults to
+      # this repo's commit, which never changes here, so use the source commit.
       - id: deploy
         uses: actions/deploy-pages@v5
+        env:
+          GITHUB_SHA: ${{ steps.src.outputs.sha }}
 
       - name: Delete the uploaded artifact
         if: always() && steps.upload.outputs.artifact_id
