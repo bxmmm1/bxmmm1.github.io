@@ -47,12 +47,36 @@ jobs:
           path: site
           retention-days: 1
 
-      # Pages treats the build version as unique per deployment. It defaults to
-      # this repo's commit, which never changes here, so use the source commit.
+      # actions/deploy-pages labels each deployment with this repo's commit, which
+      # only changes when this workflow does, and Pages quietly skips a label it
+      # has already deployed. So create the deployment here, with a label unique
+      # to this run, and wait for it the same way deploy-pages does.
       - id: deploy
-        uses: actions/deploy-pages@v5
+        uses: actions/github-script@v9
         env:
-          GITHUB_SHA: ${{ steps.src.outputs.sha }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+          BUILD_VERSION: ${{ steps.src.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        with:
+          script: |
+            const { owner, repo } = context.repo
+            const { data } = await github.request('POST /repos/{owner}/{repo}/pages/deployments', {
+              owner,
+              repo,
+              artifact_id: Number(process.env.ARTIFACT_ID),
+              pages_build_version: process.env.BUILD_VERSION,
+              oidc_token: await core.getIDToken(),
+            })
+            const id = data.id || data.status_url.split('/').pop()
+            core.info(`Created Pages deployment ${id} (${process.env.BUILD_VERSION})`)
+            core.setOutput('page_url', data.page_url)
+            for (let i = 0; i < 120; i++) {
+              await new Promise((resolve) => setTimeout(resolve, 5000))
+              const { data: d } = await github.request('GET /repos/{owner}/{repo}/pages/deployments/{id}', { owner, repo, id })
+              if (d.status === 'succeed') return core.info('Deployed')
+              if (/failed|cancelled|lost/.test(d.status)) return core.setFailed(`Pages deployment ended with ${d.status}`)
+              core.info(`Status: ${d.status}`)
+            }
+            core.setFailed('Timed out waiting for the Pages deployment')
 
       - name: Delete the uploaded artifact
         if: always() && steps.upload.outputs.artifact_id
